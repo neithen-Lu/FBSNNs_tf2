@@ -27,7 +27,7 @@ class BlackScholesBarenblatt(FBSNN):
         return super().mu_tf(t, X, Y, Z) # M x D
         
     def sigma_tf(self, t, X, Y): # M x 1, M x D, M x 1
-        return 0.4*tf.matrix_diag(X) # M x D x D
+        return 0.4*tf.linalg.diag(X) # M x D x D
     
     ###########################################################################
 
