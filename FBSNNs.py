@@ -26,23 +26,23 @@ class FBSNN(ABC): # Forward-Backward Stochastic Neural Network
         self.weights, self.biases = self.initialize_NN(layers)
         
         # tf session
-        self.sess = tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
+        self.sess = tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(allow_soft_placement=True,
                                                      log_device_placement=True))
         
         # tf placeholders and graph (training)
-        self.learning_rate = tf.placeholder(tf.float32, shape=[])
-        self.t_tf = tf.placeholder(tf.float32, shape=[M, self.N+1, 1]) # M x (N+1) x 1
-        self.W_tf = tf.placeholder(tf.float32, shape=[M, self.N+1, self.D]) # M x (N+1) x D
-        self.Xi_tf = tf.placeholder(tf.float32, shape=[1, D]) # 1 x D
+        self.learning_rate = tf.compat.v1.placeholder(tf.float32, shape=[])
+        self.t_tf = tf.compat.v1.placeholder(tf.float32, shape=[M, self.N+1, 1]) # M x (N+1) x 1
+        self.W_tf = tf.compat.v1.placeholder(tf.float32, shape=[M, self.N+1, self.D]) # M x (N+1) x D
+        self.Xi_tf = tf.compat.v1.placeholder(tf.float32, shape=[1, D]) # 1 x D
 
         self.loss, self.X_pred, self.Y_pred, self.Y0_pred = self.loss_function(self.t_tf, self.W_tf, self.Xi_tf)
                 
         # optimizers
-        self.optimizer = tf.train.AdamOptimizer(learning_rate = self.learning_rate)
+        self.optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate = self.learning_rate)
         self.train_op = self.optimizer.minimize(self.loss)
         
         # initialize session and variables
-        init = tf.global_variables_initializer()
+        init = tf.compat.v1.global_variables_initializer()
         self.sess.run(init)
     
     def initialize_NN(self, layers):
@@ -60,7 +60,7 @@ class FBSNN(ABC): # Forward-Backward Stochastic Neural Network
         in_dim = size[0]
         out_dim = size[1]        
         xavier_stddev = np.sqrt(2/(in_dim + out_dim))
-        return tf.Variable(tf.truncated_normal([in_dim, out_dim],
+        return tf.Variable(tf.random.truncated_normal([in_dim, out_dim],
                                                stddev=xavier_stddev), dtype=tf.float32)
     
     def neural_net(self, X, weights, biases):
@@ -195,5 +195,5 @@ class FBSNN(ABC): # Forward-Backward Stochastic Neural Network
     def sigma_tf(self, t, X, Y): # M x 1, M x D, M x 1
         M = self.M
         D = self.D
-        return tf.matrix_diag(tf.ones([M,D])) # M x D x D
+        return tf.linalg.diag(tf.ones([M,D])) # M x D x D
     ###########################################################################
