@@ -36,24 +36,13 @@ class ResNN(layers.Layer):
         self.res_block3 = ResBlock(self.d_hidden)
         self.res_block4 = ResBlock(self.d_hidden)
         self.res_block5 = ResBlock(self.d_hidden)
-        # Output linear layer
+        # # Output linear layer
         self.linear_out = layers.Dense(2)
-
-    # def build(self):
-    #     super(ResNN, self).__init__()
-    #     # Input linear layer
-    #     # self.linear_in = layers.Dense(self.d_hidden)
-    #     # Five residual blocks, with hidden dimension d_hidden
-    #     self.res_block1.build()
-    #     self.res_block2.build()
-    #     self.res_block3.build()
-    #     self.res_block4.build()
-    #     self.res_block5.build()
-        # Output linear layer
-        # self.linear_out = layers.Dense(2)
     
-    # @tf.function
-    def call(self, inputs):
+    def call(self,t,x):
+        # concat t and x
+        t = tf.repeat(tf.expand_dims(tf.expand_dims(t,axis=0),axis=2),repeats=x.shape[0],axis=0)
+        inputs = tf.concat([t,x],2)
         # Computing the output of the input linear layer 
         fx = self.linear_in(inputs)
         # Computing the output of the five residual blocks

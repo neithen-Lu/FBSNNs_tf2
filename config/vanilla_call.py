@@ -1,5 +1,11 @@
+import numpy as np
+import tensorflow as tf
+
 def g_func(x):
-    return x-10
+    return np.linalg.norm(x,ord=2,axis=1)
 
 def d_g_func(x):
-    return 1
+    """
+    [bs,d] -> [bs,d]
+    """
+    return np.ones(x.shape)
