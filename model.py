@@ -41,8 +41,8 @@ class ResNN(layers.Layer):
     
     def call(self,t,x):
         # concat t and x
-        t = tf.repeat(tf.expand_dims(tf.expand_dims(t,axis=0),axis=2),repeats=x.shape[0],axis=0)
-        inputs = tf.concat([t,x],2)
+        t = tf.repeat(tf.expand_dims(tf.expand_dims(t,axis=0),axis=-1),repeats=x.shape[0],axis=0)
+        inputs = tf.concat([t,x],-1)
         # Computing the output of the input linear layer 
         fx = self.linear_in(inputs)
         # Computing the output of the five residual blocks

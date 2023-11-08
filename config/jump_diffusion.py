@@ -1,7 +1,7 @@
 import tensorflow as tf
 import numpy as np
 
-# pure jump
+# jump diffusion
 def f_func(x):
     """
     [bs,d] -> [bs]
@@ -15,7 +15,10 @@ def b_func(x):
     return np.zeros(x.shape)
 
 def sigma_func(x):
-    return np.zeros((x.shape[0],x.shape[1],x.shape[1]))
+    """
+    [bs,d] -> [bs,d,d]
+    """
+    return np.repeat(np.expand_dims(np.identity(x.shape[-1],dtype=np.float32) * 0.4,0),x.shape[0],axis=0)
 
 def int_G_nv_dz_func(x,poisson_lambda,normal_mu,normal_sigma):
     return poisson_lambda * x * (np.exp(normal_mu+normal_sigma**2/2)-1)
