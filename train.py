@@ -5,7 +5,6 @@ import scipy
 import math
 import os
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-import sys
 import matplotlib.pyplot as plt
 import random
 
@@ -13,14 +12,9 @@ import random
 from model import ResNN
 from utils.parser import parser
 
-"""
-TODO list
-1. to avoid floating point error, consider change dt to 1 and hence scale T acordingly
-"""
-
 
 class temporal_difference_learning():
-    def __init__(self,T,N,batch_size,d_var,d_hidden,G_func,b_func,sigma_func,f_func,g_func,d_g_func,poisson_lambda):
+    def __init__(self,T,N,batch_size,d_var,d_hidden,G_func,b_func,sigma_func,f_func,g_func,d_g_func,poisson_lambda,config_name):
         """
         T:
         N:
@@ -63,20 +57,22 @@ class temporal_difference_learning():
         # sample Brownian motion
         self.dW = scipy.stats.norm.rvs(scale=math.sqrt(self.dt),size=(self.batch_size,self.N,self.d_var))
         # sample jumps
-        exp_time = scipy.stats.expon.rvs(scale=1/self.poisson_lambda,size=(self.batch_size,1,self.d_var))
-        while min(np.sum(exp_time,axis=1)) < self.T:
-            exp_time = np.concatenate((exp_time,scipy.stats.expon.rvs(scale=1/self.poisson_lambda,size=(self.batch_size,1,self.d_var))),axis=1)   # sample exponential as arrival time
+        exp_time = scipy.stats.expon.rvs(scale=1/self.poisson_lambda,size=(self.batch_size,1,1))
+        while np.min(np.sum(exp_time,axis=1)) < self.T:
+            # print(np.min(np.sum(exp_time,axis=1)))
+            exp_time = np.concatenate((exp_time,scipy.stats.expon.rvs(scale=1/self.poisson_lambda,size=(self.batch_size,1,1))),axis=1)   # sample exponential as arrival time
         exp_time = (np.cumsum(exp_time,axis=1) // self.dt).astype(int) # discretize continuous jump times to time intervals
-        jump_count = np.zeros((self.batch_size,self.N,self.d_var))
+        jump_count = np.zeros((self.batch_size,self.N,1))
         jump_count[np.where(exp_time<self.N)[0],exp_time[exp_time<self.N]] = jump_count[np.where(exp_time<self.N)[0],exp_time[exp_time<self.N]]+1 
         # TODO ⬆️we currently ignore the possibility that multiple jumps may happen in the same time interval
-        # four kinds of jump size distribution are considered in paper
+        # jump size distribution 
         J = scipy.stats.norm.rvs(loc=0.4,scale=0.25,size=(self.batch_size,self.N,self.d_var)) # normal
-        # J = scipy.stats.uniform.rvs(loc=-0.4,scale=0.8,size=(self.batch_size,self.N)) # uniform
-        # J = scipy.stats.expon.rvs(scale=1/3,size=(self.batch_size,self.N)) # exponential
-        # J = bernoulli
+        if args.config_name == 'jump_diffusion_d':
+            J = np.ones((self.batch_size,self.N,self.d_var)) * 0.1
         J = np.multiply(jump_count,J)
-        J = np.concatenate((np.zeros((self.batch_size,1,self.d_var)),J),axis=1)
+        J = np.concatenate((J,np.zeros((self.batch_size,1,self.d_var))),axis=1)
+        # print(sum(J))
+        # exit(0)
 
         for n in range(self.N):
             # eq 2.9
@@ -90,7 +86,7 @@ class temporal_difference_learning():
                 # X_n
                 X_n = tf.Variable(self.X[:,n,:],dtype=tf.float32)
                 output = self.model(self.t[n],X_n) # output shape [bs,2]
-                N1 = output[:,0]; N2 = output[:,1] # [bs,1]
+                N1 = output[:,0]; N2 = output[:,1] # [bs,]
                 dN1 = tape.gradient(N1,X_n) # [bs,d]
                 # X_T
                 X_T = tf.Variable(self.X[:,-1,:],dtype=tf.float32)
@@ -109,17 +105,17 @@ class temporal_difference_learning():
                 # self.sigma_func(self.X[:,n,:]): [bs,d,d]
                 # self.dW[:,n,:]: [bs,d,d]
                 # self.dW[:,n,:]: [bs,d]
-                TD_error = -self.f_func(self.X[:,n,:]) * self.dt + tf.einsum('bi,bi->b',tf.einsum('bji,bj->bi',self.sigma_func(self.X[:,n,:]),dN1),self.dW[:,n]) + (N1_jump-N1) - self.dt * N2 + N1 - N1_next
+                TD_error = -self.f_func(self.X[:,n,:],self.poisson_lambda) * self.dt + tf.einsum('bi,bi->b',tf.einsum('bji,bj->bi',self.sigma_func(self.X[:,n,:]),dN1),self.dW[:,n,:]) + (N1_jump-N1) - self.dt * N2 + N1 - N1_next
                 # TD_error = -self.f_func(self.X[:,n,:]) * self.dt + tf.einsum('bi,bi->b',tf.einsum('bji,bj->bi',self.sigma_func(self.X[:,n,:]),dN1),self.dW[:,n]) - self.dt * N2 + N1 - N1_next
                 Loss_1 = tf.linalg.norm(TD_error,ord=2)**2
                 Loss_2 = tf.linalg.norm(N1_T - self.g_func(self.X[:,-1,:]),ord=2)**2/(self.N)
                 Loss_3 = tf.linalg.norm(dN1_T - self.d_g_func(self.X[:,-1,:]),ord=2)**2/(self.N)
-                Loss_4 = tf.math.abs(tf.math.reduce_sum(N1_jump - N1- self.dt * N2))/self.batch_size
-                # Loss_4 = tf.linalg.norm(tf.multiply(N1_jump - N1- self.dt * N2,np.squeeze(jump_count[:,n,:])),ord=1)
-                Loss = Loss_1 + Loss_2 + Loss_3 + Loss_4
+                Loss_4 = tf.math.abs(tf.math.reduce_sum(N1_jump - N1- self.dt * N2))
+                loss_4_weight = 1/self.batch_size
+                Loss = Loss_1 + Loss_2 + Loss_3 + loss_4_weight * Loss_4
                 self.optimizer.minimize(Loss,self.model.trainable_weights,tape=tape)
                 del tape
-        print(Loss,Loss_4,self.model(self.t[0],np.ones((1,1)))[:,0])
+        print(Loss,Loss_4,self.model(self.t[0],np.ones((1,self.d_var)))[:,0])
 
             
 
@@ -149,7 +145,7 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     random.seed(args.seed)
 
-    if args.config_name == 'pure_brownian_1':
+    if args.config_name == 'pure_brownian':
         from config.pure_brownian import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
     elif args.config_name == 'pure_jump_1':
         from config.pure_jump import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
@@ -159,6 +155,11 @@ if __name__ == "__main__":
         from config.jump_diffusion import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
         args.d_var = 1
         args.batch_size = 250
+    elif args.config_name == 'jump_diffusion_d':
+        from config.jump_diffusion_d import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
+        args.d_var = 100
+        args.batch_size = 500
+        args.d_hidden = args.d_var + 10
 
     Trainer = temporal_difference_learning(T=args.T,
                                            N=args.N,
@@ -171,7 +172,8 @@ if __name__ == "__main__":
                                            sigma_func=sigma_func,
                                            poisson_lambda=args.poisson_lambda,
                                            g_func=g_func,
-                                           d_g_func=d_g_func)
+                                           d_g_func=d_g_func,
+                                           config_name=args.config_name)
     for i in range(400):
         print(i)
         Trainer.train_loop()
@@ -182,19 +184,18 @@ if __name__ == "__main__":
     dt = args.T/args.N
     dW = scipy.stats.norm.rvs(scale=math.sqrt(dt),size=(args.batch_size,args.N,args.d_var))
     # sample jumps
-    jump_count = np.zeros((args.batch_size,args.N,args.d_var))
-    exp_time = scipy.stats.expon.rvs(scale=1/args.poisson_lambda,size=(args.batch_size,1,args.d_var))
-    while min(np.sum(exp_time,axis=1)) < args.T:
-        exp_time = np.concatenate((exp_time,scipy.stats.expon.rvs(scale=1/args.poisson_lambda,size=(args.batch_size,1,args.d_var))),axis=1)   # sample exponential as arrival time
+    jump_count = np.zeros((args.batch_size,args.N,1))
+    exp_time = scipy.stats.expon.rvs(scale=1/args.poisson_lambda,size=(args.batch_size,1,1))
+    while np.min(np.sum(exp_time,axis=1)) < args.T:
+        # print(np.min(np.sum(exp_time,axis=1)))
+        exp_time = np.concatenate((exp_time,scipy.stats.expon.rvs(scale=1/args.poisson_lambda,size=(args.batch_size,1,1))),axis=1)   # sample exponential as arrival time
     exp_time = (np.cumsum(exp_time,axis=1) // dt).astype(int) # discretize continuous jump times to time intervals
-    jump_count = np.zeros((args.batch_size,args.N,args.d_var))
+    jump_count = np.zeros((args.batch_size,args.N,1))
     jump_count[np.where(exp_time<args.N)[0],exp_time[exp_time<args.N]] = jump_count[np.where(exp_time<args.N)[0],exp_time[exp_time<args.N]]+1 
     # TODO ⬆️we currently ignore the possibility that multiple jumps may happen in the same time interval
-    # four kinds of jump size distribution are considered in paper
+    # jump size distribution
     J = scipy.stats.norm.rvs(loc=0.4,scale=0.25,size=(args.batch_size,args.N,args.d_var)) # normal
-    # J = scipy.stats.uniform.rvs(loc=-0.4,scale=0.8,size=(args.batch_size,args.N)) # uniform
-    # J = scipy.stats.expon.rvs(scale=1/3,size=(args.batch_size,args.N)) # exponential
-    # J = bernoulli
+    # J = np.ones((args.batch_size,args.N,args.d_var)) * 0.1
     J = np.multiply(jump_count,J)
     J = np.concatenate((J,np.zeros((args.batch_size,1,args.d_var))),axis=1)
     
@@ -212,7 +213,7 @@ if __name__ == "__main__":
         output = model(t[n],X[:,n,:])
         Y_pred[:,n] = output[:,0].numpy()
 
-    samples = 30
+    samples = 10
     
     plt.figure()
     print(t_test.shape,Y_test.shape)
@@ -228,7 +229,6 @@ if __name__ == "__main__":
     
     plt.xlabel('$t$')
     plt.ylabel('$Y_t = u(t,X_t)$')
-    # plt.title('100-dimensional Black-Scholes-Barenblatt')
     plt.legend()
     
     plt.savefig(f'figures/{args.config_name}_a_loss4.png')

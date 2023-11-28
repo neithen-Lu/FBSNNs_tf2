@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 
 # pure brownian
-def f_func(x):
+def f_func(x,poisson_lambda):
     """
     [bs,d] -> [bs]
     """

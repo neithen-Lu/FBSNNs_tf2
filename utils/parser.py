@@ -9,11 +9,10 @@ parser.add_argument('--d_var',default=1,type=int,help='input dimension of x')
 parser.add_argument('--poisson_lambda',type=float,default=0.3, help='lambda for poisson distribution in jump generation')
 parser.add_argument('--jump_dist',choices=['normal','exp','uniform','bernoulli'],default='normal',
                     help='distribution for jump size')
-parser.add_argument('--config_name',choices=['pure_jump_1','pure_brownian_1','jump_diffusion_1'],
-                    help='''pure_brownian_1: one dimensional brownian motion
+parser.add_argument('--config_name',choices=['pure_jump_1','pure_brownian','jump_diffusion_1','jump_diffusion_d'],
+                    help='''pure_brownian: brownian motion
                             pure_jump_1: one dimensional pure jump process
                             jump_diffusion_1: one dimensional jump diffusion process
-                            pure_brownian_d: multi-dimensional brownian motion
                             pure_jump_d: multi-dimensional pure jump process
                             jump_diffusion_d: multi-dimensional jump diffusion process
                             ''')
