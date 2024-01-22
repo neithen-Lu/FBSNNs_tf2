@@ -10,7 +10,7 @@ import random
 
 from model import ResNN, ResNN_state
 from utils.parser import parser
-from utils.sample import sample_brownian,sample_jump
+from utils.sample import sample_brownian
 
 
 class temporal_difference_learning():
@@ -38,10 +38,6 @@ class temporal_difference_learning():
         self.X = np.ones((args.batch_size,args.N+1,args.d_var))
         self.X[:,-1,:] = np.random.randn(args.batch_size,args.d_var)
         self.poisson_lambda = poisson_lambda
-        if args.config_name == 'jump_diffusion_d':
-            self.jump_type='constant'
-        else:
-            self.jump_type='normal'
 
         # functional component
         self.b_func = b_func
@@ -66,10 +62,6 @@ class temporal_difference_learning():
     def train_loop(self):
         # sample Brownian motion
         self.dW = sample_brownian(batch_size=self.batch_size,N=self.N,d_var=self.d_var,dt=self.dt)
-        # sample jumps
-        J,_ = sample_jump(poisson_lambda=self.poisson_lambda,batch_size=self.batch_size,T=self.T,N=self.N,d_var=self.d_var,dt=self.dt,jump_type=self.jump_type)
-        # print(sum(J))
-        # exit(0)
 
         # state vector to record
         # (1) past average price, for Asian options
@@ -83,20 +75,17 @@ class temporal_difference_learning():
             # self.sigma_func(self.X[:,n,:]): [bs,d,d]
             # self.dW[:,n,:]: [bs,d,d]
             # self.dW[:,n,:]: [bs,d]
-            self.X[:,n+1,:] = self.X[:,n,:] + self.b_func(self.X[:,n,:]) * self.dt + tf.einsum('bij,bj->bi',self.sigma_func(self.X[:,n,:]),self.dW[:,n,:]) + G_func(self.X[:,n,:],J[:,n,:]) - self.dt * int_G_nv_dz_func(self.X[:,n,:],self.poisson_lambda,0.4,0.25)
+            self.X[:,n+1,:] = self.X[:,n,:] + self.b_func(self.X[:,n,:]) * self.dt + tf.einsum('bij,bj->bi',self.sigma_func(self.X[:,n,:]),self.dW[:,n,:])
 
             # Asian options: update the average price (for illustration we use geometric average here, as it has an analytical BS solution)
             if self.config_name == 'asian':
                 self.X = self.X.clip(min=0.01)
                 self.state[:,n+1] = np.squeeze(np.power(np.multiply(np.power(np.expand_dims(self.state[:,n],1),n+1), self.X[:,n+1,:]),1/(n+2))) # geometric average
                 self.state[:,-1] = np.squeeze(np.power(np.multiply(np.power(np.expand_dims(self.state[:,n+1],1),n+2), self.X[:,-1,:]),1/(n+3)))
-                jump_state = np.squeeze(np.power(np.multiply(np.power(np.expand_dims(self.state[:,n+1],1),n+2), self.X[:,n,:]+G_func(self.X[:,n,:],J[:,n,:])),1/(n+3)))
-
             # Barrier options: update if the stock price triggers the barrier condition
             elif self.config_name == 'barrier':
                 self.state[:,n+1] = np.squeeze(barrier_fn(np.expand_dims(self.state[:,n],1),self.X[:,n+1,:]))
                 self.state[:,-1] = np.squeeze(barrier_fn(np.expand_dims(self.state[:,n],1),self.X[:,-1,:]))
-                jump_state = np.squeeze(barrier_fn(np.expand_dims(self.state[:,n-1],1),self.X[:,n,:]+G_func(self.X[:,n,:],J[:,n,:])))
             
             with tf.GradientTape(persistent=True) as tape:
                 if self.config_name in ['asian','barrier']:
@@ -112,10 +101,7 @@ class temporal_difference_learning():
                     # X_n+1
                     X_next = tf.Variable(self.X[:,n+1,:],dtype=tf.float32)
                     N1_next = self.model(self.t[n+1],np.expand_dims(self.state[:,n+1],1),X_next)[:,0]
-                    # jump output, used in Loss_1 and Loss_4
-                    X_jump = tf.Variable(self.X[:,n,:]+G_func(self.X[:,n,:],J[:,n,:]),dtype=tf.float32)
-                    N1_jump = self.model(self.t[n],np.expand_dims(jump_state,1),X_jump)[:,0]
-
+                
                 else:
                     # X_n
                     X_n = tf.Variable(self.X[:,n,:],dtype=tf.float32)
@@ -129,9 +115,6 @@ class temporal_difference_learning():
                     # X_n+1
                     X_next = tf.Variable(self.X[:,n+1,:],dtype=tf.float32)
                     N1_next = self.model(self.t[n+1],X_next)[:,0]
-                    # jump output, used in Loss_1 and Loss_4
-                    X_jump = tf.Variable(self.X[:,n,:]+G_func(self.X[:,n,:],J[:,n,:]),dtype=tf.float32)
-                    N1_jump = self.model(self.t[n],X_jump)[:,0]
                 
 
                 # compute loss
@@ -140,33 +123,24 @@ class temporal_difference_learning():
                 # self.sigma_func(self.X[:,n,:]): [bs,d,d]
                 # self.dW[:,n,:]: [bs,d,d]
                 # self.dW[:,n,:]: [bs,d]
-                TD_error = -self.f_func(self.X[:,n,:],self.poisson_lambda) * self.dt + tf.einsum('bi,bi->b',tf.einsum('bji,bj->bi',self.sigma_func(self.X[:,n,:]),dN1),self.dW[:,n,:]) + (N1_jump-N1) - self.dt * N2 + N1 - N1_next
-                # if self.config_name == 'barrier': # stays zero forever if not within boundary
-                #     TD_error = TD_error * self.state
-                # TD_error = -self.f_func(self.X[:,n,:]) * self.dt + tf.einsum('bi,bi->b',tf.einsum('bji,bj->bi',self.sigma_func(self.X[:,n,:]),dN1),self.dW[:,n]) - self.dt * N2 + N1 - N1_next
+                TD_error = -self.f_func(self.X[:,n,:],self.poisson_lambda) * self.dt + tf.einsum('bi,bi->b',tf.einsum('bji,bj->bi',self.sigma_func(self.X[:,n,:]),dN1),self.dW[:,n,:])  + N1 - N1_next
                 Loss_1 = tf.linalg.norm(TD_error,ord=2)**2
                 if self.config_name == 'asian':
                     Loss_2 = tf.linalg.norm(N1_T - self.g_func(self.X[:,-1,:],np.expand_dims(self.state[:,-1],1)),ord=2)**2/(self.N)
                     Loss_3 = tf.linalg.norm(dN1_T - self.d_g_func(self.X[:,-1,:],np.expand_dims(self.state[:,-1],1),self.N),ord=2)**2/(self.N)
-                    Loss_4 = tf.math.abs(tf.math.reduce_sum(N1_jump - N1- self.dt * N2))
                 elif self.config_name == 'barrier':
                     Loss_2 = tf.linalg.norm(N1_T - self.g_func(self.X[:,-1,:],np.expand_dims(self.state[:,-1],1)),ord=2)**2/(self.N)
                     Loss_3 = tf.linalg.norm(dN1_T - self.d_g_func(self.X[:,-1,:],np.expand_dims(self.state[:,-1],1)),ord=2)**2/(self.N)
-                    Loss_4 = tf.math.abs(tf.math.reduce_sum((N1_jump - N1- self.dt * N2)))
                 else:
                     Loss_2 = tf.linalg.norm(N1_T - self.g_func(self.X[:,-1,:]),ord=2)**2/(self.N)
                     Loss_3 = tf.linalg.norm(dN1_T - self.d_g_func(self.X[:,-1,:]),ord=2)**2/(self.N)
-                    Loss_4 = tf.math.abs(tf.math.reduce_sum(N1_jump - N1- self.dt * N2))
-                # loss_4_weight = 1/self.batch_size
-                loss_4_weight = 0
-                Loss = Loss_1 + Loss_2 + Loss_3 + loss_4_weight * Loss_4
+                Loss = Loss_1 + Loss_2 + Loss_3
             self.optimizer.minimize(Loss,self.model.trainable_weights,tape=tape)
             # del tape
-
         if self.config_name in ['barrier','asian']:
-            print(Loss_1,Loss_2,Loss_3,Loss_4,self.model(self.t[0],np.ones((1,1)),np.ones((1,self.d_var)))[:,0])
+            print(Loss_1,Loss_2,Loss_3,self.model(self.t[0],np.ones((1,1)),np.ones((1,self.d_var)))[:,0])
         else:
-            print(Loss_1,Loss_2,Loss_3,Loss_4,self.model(self.t[0],np.ones((1,self.d_var)))[:,0])
+            print(Loss_1,Loss_2,Loss_3,self.model(self.t[0],np.ones((1,self.d_var)))[:,0])
 
             
 
@@ -178,7 +152,6 @@ if __name__ == "__main__":
     os.environ["OMP_NUM_THREADS"] = "5"
     os.environ["TF_NUM_INTRAOP_THREADS"] = "5"
     os.environ["TF_NUM_INTEROP_THREADS"] = "5"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "7"
 
     tf.config.threading.set_inter_op_parallelism_threads(
         num_threads
@@ -198,34 +171,14 @@ if __name__ == "__main__":
 
     if args.config_name == 'pure_brownian':
         from config.pure_brownian import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
-        jump_type='normal'
-    elif args.config_name == 'pure_jump_1':
-        from config.pure_jump import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
-        args.d_var = 1
-        args.batch_size = 1000
-        jump_type='normal'
-    elif args.config_name == 'jump_diffusion_1':
-        from config.jump_diffusion import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
-        args.d_var = 1
-        args.batch_size = 250
-        jump_type='normal'
-    elif args.config_name == 'jump_diffusion_d':
-        from config.jump_diffusion_d import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
-        args.d_var = 100
-        args.batch_size = 500
-        args.d_hidden = args.d_var + 10
-        jump_type='constant'
     elif args.config_name == 'barrier':
         from config.barrier_option import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact,barrier_fn
         args.d_var = 1
         args.batch_size = 1000
-        jump_type='normal'
     elif args.config_name == 'asian':
         from config.asian_option import f_func,b_func,G_func,sigma_func,int_G_nv_dz_func,g_func,d_g_func,u_exact
         args.d_var = 1
         args.batch_size = 1000
-        jump_type='normal'
-
 
     Trainer = temporal_difference_learning(T=args.T,
                                            N=args.N,
@@ -249,14 +202,12 @@ if __name__ == "__main__":
     # test data
     dt = args.T/args.N
     dW = scipy.stats.norm.rvs(scale=math.sqrt(dt),size=(args.batch_size,args.N,args.d_var))
-    # sample jumps
-    J,_ = sample_jump(poisson_lambda=args.poisson_lambda,batch_size=args.batch_size,T=args.T,N=args.N,d_var=args.d_var,dt=dt,jump_type=jump_type)
     
     X = np.ones((args.batch_size,args.N+1,args.d_var))
     X[:,-1,:] = np.random.randn(args.batch_size,args.d_var)
     state = np.ones((args.batch_size,args.N+1))
     for n in range(args.N):
-        X[:,n+1,:] = X[:,n,:] + b_func(X[:,n,:]) * dt + tf.einsum('bij,bj->bi',sigma_func(X[:,n,:]),dW[:,n,:]) + G_func(X[:,n,:],J[:,n,:]) - dt * int_G_nv_dz_func(X[:,n,:],args.poisson_lambda,0.4,0.25)
+        X[:,n+1,:] = X[:,n,:] + b_func(X[:,n,:]) * dt + tf.einsum('bij,bj->bi',sigma_func(X[:,n,:]),dW[:,n,:]) 
         # Asian options: update the average price (for illustration we use geometric average here, as it has an analytical BS solution)
         if args.config_name == 'asian':
             state[:,n+1] = np.squeeze(np.power(np.multiply(np.power(np.expand_dims(state[:,n],1),n+1), X[:,n+1,:]),1/(n+2))) # geometric average
@@ -299,6 +250,6 @@ if __name__ == "__main__":
     plt.ylabel('$Y_t = u(t,X_t)$')
     plt.legend()
     
-    plt.savefig(f'figures/{args.config_name}_wo_loss4.png')
+    plt.savefig(f'figures/nojump_{args.config_name}.png')
 
 

@@ -37,4 +37,4 @@ def d_g_func(x):
 
 # true price function
 def u_exact(t,T,X): # (N+1) x 1, (N+1) x D
-    return np.exp(0.25*(T - t))*np.sqrt(np.sum(X**2, 1, keepdims = True))
+    return np.exp(0.5*(T - t))*np.sqrt(np.sum(X**2, 1, keepdims = True))
